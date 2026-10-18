@@ -8,8 +8,9 @@ import ecdsa
 from mnemonic import Mnemonic
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.request import HTTPXRequest
 
-# دریافت توکن و آیدی ادمین از متغیرهای رندر
+# متغیرها
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
@@ -39,7 +40,7 @@ def generate_wallet(words_count: int = 12):
     # آدرس اتریوم / EVM
     eth_addr = "0x" + hashlib.sha256(public_key_bytes).hexdigest()[-40:]
 
-    # آدرس بیت‌کوین
+    # آدرس بیت‌کوین (Legacy P2PKH)
     sha_pk = hashlib.sha256(b'\x04' + public_key_bytes).digest()
     rip_pk = hashlib.new('ripemd160', sha_pk).digest()
     extended_rip = b'\x00' + rip_pk
@@ -63,21 +64,20 @@ def generate_wallet(words_count: int = 12):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔️ دسترسی غیرمجاز است.")
+        await update.message.reply_text("⛔️ ربات شخصی است و دسترسی ندارید.")
         return
 
     keyboard = [
         [
-            InlineKeyboardButton("🔑 ساخت ولت ۱۲ کلمه‌ای", callback_data="gen_12"),
-            InlineKeyboardButton("🔐 ساخت ولت ۲۴ کلمه‌ای", callback_data="gen_24")
+            InlineKeyboardButton("🔑 ولت ۱۲ کلمه‌ای", callback_data="gen_12"),
+            InlineKeyboardButton("🔐 ولت ۲۴ کلمه‌ای", callback_data="gen_24")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = (
-        "👋 سلام! به ربات اختصاصی ساخت کیف پول خوش آمدید.\n\n"
-        "برای تولید ولت معتبر روی دکمه‌های زیر بزنید:"
+    await update.message.reply_text(
+        "👋 سلام!\nبرای تولید کیف پول استاندارد BIP-39 یکی از گزینه‌ها را بزنید:",
+        reply_markup=reply_markup
     )
-    await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -91,7 +91,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"✅ **کیف پول {words_count} کلمه‌ای:**\n\n"
-        f"📝 **عبارت بازیابی:**\n"
+        f"📝 **عبارت بازیابی (Seed):**\n"
         f"`{wallet['words']}`\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"🔹 **Ethereum / EVM:**\n"
@@ -112,29 +112,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🔄 مجدد ۲۴ کلمه‌ای", callback_data="gen_24")
         ]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def main_async():
+def main():
     if not BOT_TOKEN:
         print("خطا: BOT_TOKEN تنظیم نشده است!")
         return
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # حل ریشه‌ای خطای تایم‌اوت ارتباط با تلگرام
+    request_config = HTTPXRequest(
+        connect_timeout=60.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=60.0
+    )
+
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN.strip())
+        .request(request_config)
+        .get_updates_request(request_config)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("ربات با موفقیت فعال شد و آماده دریافت پیام است...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-
-    # زنده نگه داشتن لوپ ربات
-    while True:
-        await asyncio.sleep(3600)
+    print("ربات با موفقیت آنلاین شد.")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_async())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    main()
