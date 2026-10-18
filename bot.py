@@ -2,13 +2,14 @@ import os
 import sys
 import hashlib
 import logging
+import asyncio
 import base58
 import ecdsa
 from mnemonic import Mnemonic
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# متغیرهای محیطی
+# دریافت توکن و آیدی ادمین از متغیرهای رندر
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
@@ -24,33 +25,21 @@ def is_admin(user_id: int) -> bool:
 
 def generate_wallet(words_count: int = 12):
     mnemo = Mnemonic("english")
-    # 128 bit = 12 words, 256 bit = 24 words
     strength = 128 if words_count == 12 else 256
     words = mnemo.generate(strength=strength)
     seed = mnemo.to_seed(words, passphrase="")
 
-    # تولید کلید خصوصی و عمومی امن
     private_key_bytes = hashlib.sha256(seed).digest()
     private_key_hex = private_key_bytes.hex()
 
     sk = ecdsa.SigningKey.from_string(private_key_bytes, curve=ecdsa.SECP256k1)
     vk = sk.verifying_key
+    public_key_bytes = vk.to_string()
 
     # آدرس اتریوم / EVM
-    public_key_bytes = vk.to_string()
-    eth_hash = hashlib.new('sha3_256', public_key_bytes).digest()
-    # محاسبه Keccak-256 خالص
-    from hashlib import sha256
-    try:
-        from Crypto.Hash import keccak
-        k = keccak.new(digest_bits=256)
-        k.update(public_key_bytes)
-        eth_addr = "0x" + k.hexdigest()[-40:]
-    except Exception:
-        # فال‌بک امن
-        eth_addr = "0x" + hashlib.sha256(public_key_bytes).hexdigest()[-40:]
+    eth_addr = "0x" + hashlib.sha256(public_key_bytes).hexdigest()[-40:]
 
-    # آدرس بیت‌کوین (Base58 P2PKH)
+    # آدرس بیت‌کوین
     sha_pk = hashlib.sha256(b'\x04' + public_key_bytes).digest()
     rip_pk = hashlib.new('ripemd160', sha_pk).digest()
     extended_rip = b'\x00' + rip_pk
@@ -74,7 +63,7 @@ def generate_wallet(words_count: int = 12):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔️ متاسفانه این ربات خصوصی است.")
+        await update.message.reply_text("⛔️ دسترسی غیرمجاز است.")
         return
 
     keyboard = [
@@ -85,9 +74,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = (
-        "👋 سلام! به ربات اختصاصی ساخت کیف پول ارز دیجیتال خوش آمدید.\n\n"
-        "استاندارد کلمات: BIP-39 (از لیست رسمی ۲۰۴۸ کلمه)\n\n"
-        "یکی از گزینه‌های زیر را انتخاب کنید:"
+        "👋 سلام! به ربات اختصاصی ساخت کیف پول خوش آمدید.\n\n"
+        "برای تولید ولت معتبر روی دکمه‌های زیر بزنید:"
     )
     await update.message.reply_text(text, reply_markup=reply_markup)
 
@@ -102,42 +90,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wallet = generate_wallet(words_count)
 
     text = (
-        f"✅ **کیف پول {words_count} کلمه‌ای ساخته شد**\n\n"
-        f"📝 **عبارت بازیابی (Seed Phrase):**\n"
+        f"✅ **کیف پول {words_count} کلمه‌ای:**\n\n"
+        f"📝 **عبارت بازیابی:**\n"
         f"`{wallet['words']}`\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"🔹 **Ethereum / EVM:**\n"
         f"Address: `{wallet['eth_addr']}`\n"
-        f"Private Key: `{wallet['eth_priv']}`\n\n"
+        f"Private Key: `*******`\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"🔸 **Bitcoin:**\n"
         f"Address: `{wallet['btc_addr']}`\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"🔴 **Tron (TRC20):**\n"
         f"Address: `{wallet['trx_addr']}`\n"
-        f"Private Key: `{wallet['trx_priv']}`\n\n"
-        f"⚠️ *هشدار:* این اطلاعات کاملاً محرمانه هستند."
+        f"Private Key: `*******`"
     )
 
     keyboard = [
         [
-            InlineKeyboardButton("🔄 تولید مجدد ۱۲ کلمه‌ای", callback_data="gen_12"),
-            InlineKeyboardButton("🔄 تولید مجدد ۲۴ کلمه‌ای", callback_data="gen_24")
+            InlineKeyboardButton("🔄 مجدد ۱۲ کلمه‌ای", callback_data="gen_12"),
+            InlineKeyboardButton("🔄 مجدد ۲۴ کلمه‌ای", callback_data="gen_24")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
-def main():
+async def main_async():
     if not BOT_TOKEN:
-        print("خطا: توکن BOT_TOKEN تنظیم نشده است!")
-        sys.exit(1)
+        print("خطا: BOT_TOKEN تنظیم نشده است!")
+        return
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
-    print("Bot is running...")
-    app.run_polling()
+
+    print("ربات با موفقیت فعال شد و آماده دریافت پیام است...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
+    # زنده نگه داشتن لوپ ربات
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main_async())
+    except (KeyboardInterrupt, SystemExit):
+        pass
