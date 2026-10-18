@@ -1,3 +1,4 @@
 python-telegram-bot==21.10
-bip-utils==2.9.3
-cffi>=1.15.0
+mnemonic==0.21
+ecdsa==0.19.0
+base58==2.1.1
